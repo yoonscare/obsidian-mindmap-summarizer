@@ -1,7 +1,7 @@
 {
   "id": "mindmap-summarizer",
   "name": "Mindmap Summarizer",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "minAppVersion": "0.15.0",
   "description": "AI-powered text summarization that generates mindmaps. Supports OpenAI, Anthropic Claude, Google Gemini, and xAI Grok.",
   "author": "yoonscare",

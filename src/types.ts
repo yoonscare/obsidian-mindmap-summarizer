@@ -55,6 +55,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 export const AVAILABLE_MODELS: Record<AIProviderType, string[]> = {
     openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
     anthropic: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
-    gemini: ['gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.5-flash-8b'],
+    gemini: ['gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.5-flash-8b', 'gemini-2.5-flash-image', 'gemini-3-pro-image-preview'],
     grok: ['grok-2-latest', 'grok-2', 'grok-beta']
 };
