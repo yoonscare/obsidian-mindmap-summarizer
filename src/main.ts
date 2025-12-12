@@ -21,7 +21,7 @@ export default class MindmapSummarizerPlugin extends Plugin {
         await this.loadSettings();
         this.mindmapGenerator = new MindmapGenerator();
 
-        // Add ribbon icon - Opens input modal
+        // Add ribbon icon - Opens input modal and inserts into current note
         this.addRibbonIcon('brain', 'Generate Mindmap', async () => {
             const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (activeView) {
@@ -30,13 +30,13 @@ export default class MindmapSummarizerPlugin extends Plugin {
                     new Notice('The note is empty');
                     return;
                 }
-                this.openInputModal(content, activeView.file);
+                this.openInputModalForInsert(activeView.editor, content);
             } else {
                 new Notice('Please open a markdown file first');
             }
         });
 
-        // Command: Generate mindmap from current note (with modal)
+        // Command: Generate mindmap from current note (insert into note)
         this.addCommand({
             id: 'generate-mindmap-current',
             name: 'Generate mindmap from current note',
@@ -46,11 +46,11 @@ export default class MindmapSummarizerPlugin extends Plugin {
                     new Notice('The note is empty');
                     return;
                 }
-                this.openInputModal(content, view.file);
+                this.openInputModalForInsert(editor, content);
             }
         });
 
-        // Command: Generate mindmap from selection (with modal)
+        // Command: Generate mindmap from selection (insert into note)
         this.addCommand({
             id: 'generate-mindmap-selection',
             name: 'Generate mindmap from selection',
@@ -60,7 +60,7 @@ export default class MindmapSummarizerPlugin extends Plugin {
                     new Notice('Please select some text first');
                     return;
                 }
-                this.openInputModal(selection, view.file);
+                this.openInputModalForInsert(editor, selection);
             }
         });
 
@@ -74,21 +74,21 @@ export default class MindmapSummarizerPlugin extends Plugin {
                     new Notice('The note is empty');
                     return;
                 }
-                await this.generateMindmapDirect(content, view.file);
+                await this.quickGenerateAndInsert(editor, content);
             }
         });
 
-        // Command: Generate and insert mindmap at cursor (with modal)
+        // Command: Generate mindmap to new file
         this.addCommand({
-            id: 'generate-mindmap-insert',
-            name: 'Generate and insert mindmap at cursor',
+            id: 'generate-mindmap-new-file',
+            name: 'Generate mindmap to new file',
             editorCallback: async (editor: Editor, view: MarkdownView) => {
-                const selection = editor.getSelection() || editor.getValue();
-                if (!selection.trim()) {
-                    new Notice('No content to summarize');
+                const content = editor.getValue();
+                if (!content.trim()) {
+                    new Notice('The note is empty');
                     return;
                 }
-                this.openInputModalForInsert(editor, selection);
+                this.openInputModalForNewFile(content, view.file);
             }
         });
 
@@ -108,67 +108,29 @@ export default class MindmapSummarizerPlugin extends Plugin {
         await this.saveData(this.settings);
     }
 
-    private openInputModal(text: string, sourceFile: TFile | null): void {
-        new MindmapInputModal(
-            this.app,
-            this.settings,
-            text,
-            async (options: MindmapInputOptions) => {
-                await this.generateMindmapWithOptions(text, sourceFile, options);
-            }
-        ).open();
-    }
-
     private openInputModalForInsert(editor: Editor, text: string): void {
         new MindmapInputModal(
             this.app,
             this.settings,
             text,
             async (options: MindmapInputOptions) => {
-                await this.generateAndInsertMindmapWithOptions(editor, text, options);
+                await this.generateAndInsertMindmap(editor, text, options);
             }
         ).open();
     }
 
-    private async generateMindmapWithOptions(
-        text: string,
-        sourceFile: TFile | null,
-        options: MindmapInputOptions
-    ): Promise<void> {
-        const loadingNotice = new Notice('Generating mindmap...', 0);
-
-        try {
-            // Create temporary settings with user's choices
-            const tempSettings = { ...this.settings };
-            tempSettings.selectedProvider = options.provider;
-            this.setModelForProvider(tempSettings, options.provider, options.model);
-
-            const provider = createProvider(tempSettings);
-
-            // Build prompt with custom instructions if provided
-            const language = options.language;
-            const customPrompt = options.customPrompt;
-
-            let finalText = text;
-            if (customPrompt) {
-                finalText = `${text}\n\n[Additional Instructions: ${customPrompt}]`;
+    private openInputModalForNewFile(text: string, sourceFile: TFile | null): void {
+        new MindmapInputModal(
+            this.app,
+            this.settings,
+            text,
+            async (options: MindmapInputOptions) => {
+                await this.generateMindmapToNewFile(text, sourceFile, options);
             }
-
-            const result = await provider.summarize(finalText, language);
-
-            loadingNotice.hide();
-
-            // Create mindmap with selected format
-            await this.createMindmapNote(result, options.outputFormat, sourceFile);
-
-        } catch (error) {
-            loadingNotice.hide();
-            console.error('Mindmap generation error:', error);
-            new Notice(`Error: ${error.message}`);
-        }
+        ).open();
     }
 
-    private async generateAndInsertMindmapWithOptions(
+    private async generateAndInsertMindmap(
         editor: Editor,
         text: string,
         options: MindmapInputOptions
@@ -208,15 +170,93 @@ export default class MindmapSummarizerPlugin extends Plugin {
                 case 'markmap':
                     mindmapContent = this.mindmapGenerator.generateMarkmap(result);
                     break;
+                case 'canvas':
+                    // Canvas needs to be saved as a separate file
+                    const activeFile = this.app.workspace.getActiveFile();
+                    await this.createCanvasFile(result, activeFile);
+                    return;
                 default:
                     mindmapContent = this.mindmapGenerator.generateMermaidMindmap(result);
             }
 
-            // Insert at cursor
-            const cursor = editor.getCursor();
-            editor.replaceRange('\n\n' + mindmapContent + '\n\n', cursor);
+            // Insert at the end of the note
+            const currentContent = editor.getValue();
+            const separator = '\n\n---\n\n## Mindmap Summary\n\n';
+            editor.setValue(currentContent + separator + mindmapContent);
+
+            // Move cursor to end
+            const lastLine = editor.lastLine();
+            editor.setCursor({ line: lastLine, ch: 0 });
 
             new Notice('Mindmap inserted!');
+
+        } catch (error) {
+            loadingNotice.hide();
+            console.error('Mindmap generation error:', error);
+            new Notice(`Error: ${error.message}`);
+        }
+    }
+
+    private async quickGenerateAndInsert(editor: Editor, text: string): Promise<void> {
+        const loadingNotice = new Notice('Generating mindmap...', 0);
+
+        try {
+            const provider = createProvider(this.settings);
+            const result = await provider.summarize(text, this.settings.language);
+
+            loadingNotice.hide();
+
+            // Generate Mermaid mindmap by default
+            const mindmapContent = this.mindmapGenerator.generateMermaidMindmap(result);
+
+            // Insert at the end of the note
+            const currentContent = editor.getValue();
+            const separator = '\n\n---\n\n## Mindmap Summary\n\n';
+            editor.setValue(currentContent + separator + mindmapContent);
+
+            // Move cursor to end
+            const lastLine = editor.lastLine();
+            editor.setCursor({ line: lastLine, ch: 0 });
+
+            new Notice('Mindmap inserted!');
+
+        } catch (error) {
+            loadingNotice.hide();
+            console.error('Mindmap generation error:', error);
+            new Notice(`Error: ${error.message}`);
+        }
+    }
+
+    private async generateMindmapToNewFile(
+        text: string,
+        sourceFile: TFile | null,
+        options: MindmapInputOptions
+    ): Promise<void> {
+        const loadingNotice = new Notice('Generating mindmap...', 0);
+
+        try {
+            // Create temporary settings with user's choices
+            const tempSettings = { ...this.settings };
+            tempSettings.selectedProvider = options.provider;
+            this.setModelForProvider(tempSettings, options.provider, options.model);
+
+            const provider = createProvider(tempSettings);
+
+            // Build prompt with custom instructions if provided
+            const language = options.language;
+            const customPrompt = options.customPrompt;
+
+            let finalText = text;
+            if (customPrompt) {
+                finalText = `${text}\n\n[Additional Instructions: ${customPrompt}]`;
+            }
+
+            const result = await provider.summarize(finalText, language);
+
+            loadingNotice.hide();
+
+            // Create mindmap in new file
+            await this.createMindmapNote(result, options.outputFormat, sourceFile);
 
         } catch (error) {
             loadingNotice.hide();
@@ -242,24 +282,35 @@ export default class MindmapSummarizerPlugin extends Plugin {
         }
     }
 
-    // Direct generation without modal (for quick command)
-    private async generateMindmapDirect(text: string, sourceFile: TFile | null): Promise<void> {
-        const loadingNotice = new Notice('Generating mindmap...', 0);
+    private async createCanvasFile(result: SummarizeResult, sourceFile: TFile | null): Promise<void> {
+        const content = this.mindmapGenerator.generateCanvasJson(result);
+        let fileName = `${result.title} - Mindmap.canvas`.replace(/[\\/:*?"<>|]/g, '-');
 
-        try {
-            const provider = createProvider(this.settings);
-            const result = await provider.summarize(text, this.settings.language);
-
-            loadingNotice.hide();
-
-            // Show format selection modal
-            new MindmapFormatModal(this.app, result, this, sourceFile).open();
-
-        } catch (error) {
-            loadingNotice.hide();
-            console.error('Mindmap generation error:', error);
-            new Notice(`Error: ${error.message}`);
+        let folder = '';
+        if (sourceFile) {
+            folder = sourceFile.parent?.path || '';
         }
+
+        const filePath = folder ? `${folder}/${fileName}` : fileName;
+
+        let finalPath = filePath;
+        let counter = 1;
+        while (this.app.vault.getAbstractFileByPath(finalPath)) {
+            const baseName = fileName.replace('.canvas', '');
+            finalPath = folder
+                ? `${folder}/${baseName} (${counter}).canvas`
+                : `${baseName} (${counter}).canvas`;
+            counter++;
+        }
+
+        await this.app.vault.create(finalPath, content);
+
+        const newFile = this.app.vault.getAbstractFileByPath(finalPath);
+        if (newFile instanceof TFile) {
+            await this.app.workspace.getLeaf().openFile(newFile);
+        }
+
+        new Notice(`Created: ${finalPath}`);
     }
 
     async createMindmapNote(result: SummarizeResult, format: string, sourceFile: TFile | null): Promise<void> {
@@ -320,91 +371,5 @@ export default class MindmapSummarizerPlugin extends Plugin {
         }
 
         new Notice(`Created: ${finalPath}`);
-    }
-}
-
-class MindmapFormatModal extends Modal {
-    result: SummarizeResult;
-    plugin: MindmapSummarizerPlugin;
-    sourceFile: TFile | null;
-
-    constructor(
-        app: App,
-        result: SummarizeResult,
-        plugin: MindmapSummarizerPlugin,
-        sourceFile: TFile | null
-    ) {
-        super(app);
-        this.result = result;
-        this.plugin = plugin;
-        this.sourceFile = sourceFile;
-    }
-
-    onOpen() {
-        const { contentEl } = this;
-
-        contentEl.createEl('h2', { text: 'Mindmap Generated!' });
-        contentEl.createEl('p', { text: `Title: ${this.result.title}` });
-        contentEl.createEl('p', { text: 'Select output format:' });
-
-        const buttonContainer = contentEl.createDiv({ cls: 'mindmap-format-buttons' });
-
-        // Mermaid format button
-        const mermaidBtn = buttonContainer.createEl('button', {
-            text: 'Mermaid Diagram',
-            cls: 'mod-cta'
-        });
-        mermaidBtn.addEventListener('click', async () => {
-            this.close();
-            await this.plugin.createMindmapNote(this.result, 'mermaid', this.sourceFile);
-        });
-
-        // Markdown list button
-        const markdownBtn = buttonContainer.createEl('button', {
-            text: 'Markdown List'
-        });
-        markdownBtn.addEventListener('click', async () => {
-            this.close();
-            await this.plugin.createMindmapNote(this.result, 'markdown', this.sourceFile);
-        });
-
-        // Markmap button
-        const markmapBtn = buttonContainer.createEl('button', {
-            text: 'Markmap Format'
-        });
-        markmapBtn.addEventListener('click', async () => {
-            this.close();
-            await this.plugin.createMindmapNote(this.result, 'markmap', this.sourceFile);
-        });
-
-        // Canvas button
-        const canvasBtn = buttonContainer.createEl('button', {
-            text: 'Canvas'
-        });
-        canvasBtn.addEventListener('click', async () => {
-            this.close();
-            await this.plugin.createMindmapNote(this.result, 'canvas', this.sourceFile);
-        });
-
-        // Copy to clipboard button
-        const copyBtn = buttonContainer.createEl('button', {
-            text: 'Copy Mermaid to Clipboard'
-        });
-        copyBtn.addEventListener('click', async () => {
-            const content = this.plugin.mindmapGenerator.generateMermaidMindmap(this.result);
-            await navigator.clipboard.writeText(content);
-            new Notice('Copied to clipboard!');
-        });
-
-        // Add some basic styling
-        buttonContainer.style.display = 'flex';
-        buttonContainer.style.flexDirection = 'column';
-        buttonContainer.style.gap = '10px';
-        buttonContainer.style.marginTop = '20px';
-    }
-
-    onClose() {
-        const { contentEl } = this;
-        contentEl.empty();
     }
 }

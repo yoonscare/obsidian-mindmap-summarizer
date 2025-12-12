@@ -3,10 +3,12 @@ import { MindmapNode, SummarizeResult } from './types';
 export class MindmapGenerator {
     /**
      * Convert SummarizeResult to Obsidian-compatible Mermaid mindmap format
+     * With larger font size using %%{init}%% directive
      */
     generateMermaidMindmap(result: SummarizeResult): string {
         const lines: string[] = [];
         lines.push('```mermaid');
+        lines.push('%%{init: {"mindmap": {"fontSize": 18}}}%%');
         lines.push('mindmap');
         lines.push(`  root((${this.escapeText(result.title)}))`);
 

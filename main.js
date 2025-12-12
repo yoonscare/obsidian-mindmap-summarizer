@@ -31,13 +31,13 @@ var import_obsidian7 = require("obsidian");
 
 // src/types.ts
 var DEFAULT_SETTINGS = {
-  selectedProvider: "openai",
+  selectedProvider: "gemini",
   openaiApiKey: "",
   openaiModel: "gpt-4o-mini",
   anthropicApiKey: "",
   anthropicModel: "claude-3-5-sonnet-20241022",
   geminiApiKey: "",
-  geminiModel: "gemini-1.5-flash",
+  geminiModel: "gemini-2.0-flash",
   grokApiKey: "",
   grokModel: "grok-2-latest",
   language: "Korean",
@@ -46,7 +46,7 @@ var DEFAULT_SETTINGS = {
 var AVAILABLE_MODELS = {
   openai: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
   anthropic: ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
-  gemini: ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"],
+  gemini: ["gemini-2.0-flash", "gemini-2.5-flash-preview-05-20", "gemini-2.5-pro-preview-06-05", "gemini-1.5-pro", "gemini-1.5-flash"],
   grok: ["grok-2-latest", "grok-2", "grok-beta"]
 };
 
@@ -350,10 +350,12 @@ function getProviderDisplayName(type) {
 var MindmapGenerator = class {
   /**
    * Convert SummarizeResult to Obsidian-compatible Mermaid mindmap format
+   * With larger font size using %%{init}%% directive
    */
   generateMermaidMindmap(result) {
     const lines = [];
     lines.push("```mermaid");
+    lines.push('%%{init: {"mindmap": {"fontSize": 18}}}%%');
     lines.push("mindmap");
     lines.push(`  root((${this.escapeText(result.title)}))`);
     for (const node of result.nodes) {
@@ -782,7 +784,7 @@ var MindmapSummarizerPlugin = class extends import_obsidian7.Plugin {
           new import_obsidian7.Notice("The note is empty");
           return;
         }
-        this.openInputModal(content, activeView.file);
+        this.openInputModalForInsert(activeView.editor, content);
       } else {
         new import_obsidian7.Notice("Please open a markdown file first");
       }
@@ -796,7 +798,7 @@ var MindmapSummarizerPlugin = class extends import_obsidian7.Plugin {
           new import_obsidian7.Notice("The note is empty");
           return;
         }
-        this.openInputModal(content, view.file);
+        this.openInputModalForInsert(editor, content);
       }
     });
     this.addCommand({
@@ -808,7 +810,7 @@ var MindmapSummarizerPlugin = class extends import_obsidian7.Plugin {
           new import_obsidian7.Notice("Please select some text first");
           return;
         }
-        this.openInputModal(selection, view.file);
+        this.openInputModalForInsert(editor, selection);
       }
     });
     this.addCommand({
@@ -820,19 +822,19 @@ var MindmapSummarizerPlugin = class extends import_obsidian7.Plugin {
           new import_obsidian7.Notice("The note is empty");
           return;
         }
-        await this.generateMindmapDirect(content, view.file);
+        await this.quickGenerateAndInsert(editor, content);
       }
     });
     this.addCommand({
-      id: "generate-mindmap-insert",
-      name: "Generate and insert mindmap at cursor",
+      id: "generate-mindmap-new-file",
+      name: "Generate mindmap to new file",
       editorCallback: async (editor, view) => {
-        const selection = editor.getSelection() || editor.getValue();
-        if (!selection.trim()) {
-          new import_obsidian7.Notice("No content to summarize");
+        const content = editor.getValue();
+        if (!content.trim()) {
+          new import_obsidian7.Notice("The note is empty");
           return;
         }
-        this.openInputModalForInsert(editor, selection);
+        this.openInputModalForNewFile(content, view.file);
       }
     });
     this.addSettingTab(new MindmapSummarizerSettingTab(this.app, this));
@@ -845,51 +847,27 @@ var MindmapSummarizerPlugin = class extends import_obsidian7.Plugin {
   async saveSettings() {
     await this.saveData(this.settings);
   }
-  openInputModal(text, sourceFile) {
-    new MindmapInputModal(
-      this.app,
-      this.settings,
-      text,
-      async (options) => {
-        await this.generateMindmapWithOptions(text, sourceFile, options);
-      }
-    ).open();
-  }
   openInputModalForInsert(editor, text) {
     new MindmapInputModal(
       this.app,
       this.settings,
       text,
       async (options) => {
-        await this.generateAndInsertMindmapWithOptions(editor, text, options);
+        await this.generateAndInsertMindmap(editor, text, options);
       }
     ).open();
   }
-  async generateMindmapWithOptions(text, sourceFile, options) {
-    const loadingNotice = new import_obsidian7.Notice("Generating mindmap...", 0);
-    try {
-      const tempSettings = { ...this.settings };
-      tempSettings.selectedProvider = options.provider;
-      this.setModelForProvider(tempSettings, options.provider, options.model);
-      const provider = createProvider(tempSettings);
-      const language = options.language;
-      const customPrompt = options.customPrompt;
-      let finalText = text;
-      if (customPrompt) {
-        finalText = `${text}
-
-[Additional Instructions: ${customPrompt}]`;
+  openInputModalForNewFile(text, sourceFile) {
+    new MindmapInputModal(
+      this.app,
+      this.settings,
+      text,
+      async (options) => {
+        await this.generateMindmapToNewFile(text, sourceFile, options);
       }
-      const result = await provider.summarize(finalText, language);
-      loadingNotice.hide();
-      await this.createMindmapNote(result, options.outputFormat, sourceFile);
-    } catch (error) {
-      loadingNotice.hide();
-      console.error("Mindmap generation error:", error);
-      new import_obsidian7.Notice(`Error: ${error.message}`);
-    }
+    ).open();
   }
-  async generateAndInsertMindmapWithOptions(editor, text, options) {
+  async generateAndInsertMindmap(editor, text, options) {
     const loadingNotice = new import_obsidian7.Notice("Generating mindmap...", 0);
     try {
       const tempSettings = { ...this.settings };
@@ -917,12 +895,62 @@ var MindmapSummarizerPlugin = class extends import_obsidian7.Plugin {
         case "markmap":
           mindmapContent = this.mindmapGenerator.generateMarkmap(result);
           break;
+        case "canvas":
+          const activeFile = this.app.workspace.getActiveFile();
+          await this.createCanvasFile(result, activeFile);
+          return;
         default:
           mindmapContent = this.mindmapGenerator.generateMermaidMindmap(result);
       }
-      const cursor = editor.getCursor();
-      editor.replaceRange("\n\n" + mindmapContent + "\n\n", cursor);
+      const currentContent = editor.getValue();
+      const separator = "\n\n---\n\n## Mindmap Summary\n\n";
+      editor.setValue(currentContent + separator + mindmapContent);
+      const lastLine = editor.lastLine();
+      editor.setCursor({ line: lastLine, ch: 0 });
       new import_obsidian7.Notice("Mindmap inserted!");
+    } catch (error) {
+      loadingNotice.hide();
+      console.error("Mindmap generation error:", error);
+      new import_obsidian7.Notice(`Error: ${error.message}`);
+    }
+  }
+  async quickGenerateAndInsert(editor, text) {
+    const loadingNotice = new import_obsidian7.Notice("Generating mindmap...", 0);
+    try {
+      const provider = createProvider(this.settings);
+      const result = await provider.summarize(text, this.settings.language);
+      loadingNotice.hide();
+      const mindmapContent = this.mindmapGenerator.generateMermaidMindmap(result);
+      const currentContent = editor.getValue();
+      const separator = "\n\n---\n\n## Mindmap Summary\n\n";
+      editor.setValue(currentContent + separator + mindmapContent);
+      const lastLine = editor.lastLine();
+      editor.setCursor({ line: lastLine, ch: 0 });
+      new import_obsidian7.Notice("Mindmap inserted!");
+    } catch (error) {
+      loadingNotice.hide();
+      console.error("Mindmap generation error:", error);
+      new import_obsidian7.Notice(`Error: ${error.message}`);
+    }
+  }
+  async generateMindmapToNewFile(text, sourceFile, options) {
+    const loadingNotice = new import_obsidian7.Notice("Generating mindmap...", 0);
+    try {
+      const tempSettings = { ...this.settings };
+      tempSettings.selectedProvider = options.provider;
+      this.setModelForProvider(tempSettings, options.provider, options.model);
+      const provider = createProvider(tempSettings);
+      const language = options.language;
+      const customPrompt = options.customPrompt;
+      let finalText = text;
+      if (customPrompt) {
+        finalText = `${text}
+
+[Additional Instructions: ${customPrompt}]`;
+      }
+      const result = await provider.summarize(finalText, language);
+      loadingNotice.hide();
+      await this.createMindmapNote(result, options.outputFormat, sourceFile);
     } catch (error) {
       loadingNotice.hide();
       console.error("Mindmap generation error:", error);
@@ -945,19 +973,28 @@ var MindmapSummarizerPlugin = class extends import_obsidian7.Plugin {
         break;
     }
   }
-  // Direct generation without modal (for quick command)
-  async generateMindmapDirect(text, sourceFile) {
-    const loadingNotice = new import_obsidian7.Notice("Generating mindmap...", 0);
-    try {
-      const provider = createProvider(this.settings);
-      const result = await provider.summarize(text, this.settings.language);
-      loadingNotice.hide();
-      new MindmapFormatModal(this.app, result, this, sourceFile).open();
-    } catch (error) {
-      loadingNotice.hide();
-      console.error("Mindmap generation error:", error);
-      new import_obsidian7.Notice(`Error: ${error.message}`);
+  async createCanvasFile(result, sourceFile) {
+    var _a;
+    const content = this.mindmapGenerator.generateCanvasJson(result);
+    let fileName = `${result.title} - Mindmap.canvas`.replace(/[\\/:*?"<>|]/g, "-");
+    let folder = "";
+    if (sourceFile) {
+      folder = ((_a = sourceFile.parent) == null ? void 0 : _a.path) || "";
     }
+    const filePath = folder ? `${folder}/${fileName}` : fileName;
+    let finalPath = filePath;
+    let counter = 1;
+    while (this.app.vault.getAbstractFileByPath(finalPath)) {
+      const baseName = fileName.replace(".canvas", "");
+      finalPath = folder ? `${folder}/${baseName} (${counter}).canvas` : `${baseName} (${counter}).canvas`;
+      counter++;
+    }
+    await this.app.vault.create(finalPath, content);
+    const newFile = this.app.vault.getAbstractFileByPath(finalPath);
+    if (newFile instanceof import_obsidian7.TFile) {
+      await this.app.workspace.getLeaf().openFile(newFile);
+    }
+    new import_obsidian7.Notice(`Created: ${finalPath}`);
   }
   async createMindmapNote(result, format, sourceFile) {
     var _a;
@@ -1004,65 +1041,5 @@ var MindmapSummarizerPlugin = class extends import_obsidian7.Plugin {
       await this.app.workspace.getLeaf().openFile(newFile);
     }
     new import_obsidian7.Notice(`Created: ${finalPath}`);
-  }
-};
-var MindmapFormatModal = class extends import_obsidian7.Modal {
-  constructor(app, result, plugin, sourceFile) {
-    super(app);
-    this.result = result;
-    this.plugin = plugin;
-    this.sourceFile = sourceFile;
-  }
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.createEl("h2", { text: "Mindmap Generated!" });
-    contentEl.createEl("p", { text: `Title: ${this.result.title}` });
-    contentEl.createEl("p", { text: "Select output format:" });
-    const buttonContainer = contentEl.createDiv({ cls: "mindmap-format-buttons" });
-    const mermaidBtn = buttonContainer.createEl("button", {
-      text: "Mermaid Diagram",
-      cls: "mod-cta"
-    });
-    mermaidBtn.addEventListener("click", async () => {
-      this.close();
-      await this.plugin.createMindmapNote(this.result, "mermaid", this.sourceFile);
-    });
-    const markdownBtn = buttonContainer.createEl("button", {
-      text: "Markdown List"
-    });
-    markdownBtn.addEventListener("click", async () => {
-      this.close();
-      await this.plugin.createMindmapNote(this.result, "markdown", this.sourceFile);
-    });
-    const markmapBtn = buttonContainer.createEl("button", {
-      text: "Markmap Format"
-    });
-    markmapBtn.addEventListener("click", async () => {
-      this.close();
-      await this.plugin.createMindmapNote(this.result, "markmap", this.sourceFile);
-    });
-    const canvasBtn = buttonContainer.createEl("button", {
-      text: "Canvas"
-    });
-    canvasBtn.addEventListener("click", async () => {
-      this.close();
-      await this.plugin.createMindmapNote(this.result, "canvas", this.sourceFile);
-    });
-    const copyBtn = buttonContainer.createEl("button", {
-      text: "Copy Mermaid to Clipboard"
-    });
-    copyBtn.addEventListener("click", async () => {
-      const content = this.plugin.mindmapGenerator.generateMermaidMindmap(this.result);
-      await navigator.clipboard.writeText(content);
-      new import_obsidian7.Notice("Copied to clipboard!");
-    });
-    buttonContainer.style.display = "flex";
-    buttonContainer.style.flexDirection = "column";
-    buttonContainer.style.gap = "10px";
-    buttonContainer.style.marginTop = "20px";
-  }
-  onClose() {
-    const { contentEl } = this;
-    contentEl.empty();
   }
 };
